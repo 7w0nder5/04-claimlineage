@@ -45,6 +45,8 @@ test("web shell has security headers and embeds only the session token", async (
   assert.equal(response.headers.get("x-frame-options"), "DENY");
   assert.match(html, /fixed-test-token/);
   assert.doesNotMatch(html, /__SESSION_TOKEN__/);
+  assert.match(html, /role="tab" aria-selected="true" aria-controls="file-form" tabindex="0"/);
+  assert.match(html, /id="claims-heading" tabindex="-1"/);
 });
 
 test("API rejects absent token, wrong host, and wrong write origin", async (t) => {

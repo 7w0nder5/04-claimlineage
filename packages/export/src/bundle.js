@@ -5,6 +5,7 @@ import {
   MAX_SNAPSHOT_BYTES,
   SCHEMA_VERSION,
   canonicalJson,
+  decodeUtf8,
   fail,
   isSha256,
   sha256,
@@ -21,6 +22,9 @@ import {
 } from "../../storage/src/workspace.js";
 
 export const BUNDLE_FORMAT = "claimlineage-bundle";
+export const MAX_BUNDLE_ITEMS = 10_000;
+export const MAX_BUNDLE_EVIDENCE_LINKS = 20_000;
+export const MAX_VERIFICATION_WORK_BYTES = 256 * 1024 * 1024;
 
 function plainObject(value, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
@@ -30,8 +34,23 @@ function plainObject(value, label) {
 }
 
 function decodeBase64(value, digest) {
-  if (typeof value !== "string" || value.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+  const maximumEncodedLength = Math.ceil(MAX_SNAPSHOT_BYTES / 3) * 4;
+  if (typeof value !== "string" || value.length > maximumEncodedLength || value.length % 4 !== 0) {
     fail("INVALID_BUNDLE", `Object ${digest} is not canonical base64.`);
+  }
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const contentLength = value.length - padding;
+  if ((padding === 2 && contentLength % 4 !== 2) || (padding === 1 && contentLength % 4 !== 3)) {
+    fail("INVALID_BUNDLE", `Object ${digest} is not canonical base64.`);
+  }
+  for (let index = 0; index < contentLength; index += 1) {
+    const code = value.charCodeAt(index);
+    const valid = (code >= 0x41 && code <= 0x5a)
+      || (code >= 0x61 && code <= 0x7a)
+      || (code >= 0x30 && code <= 0x39)
+      || code === 0x2b
+      || code === 0x2f;
+    if (!valid) fail("INVALID_BUNDLE", `Object ${digest} is not canonical base64.`);
   }
   const bytes = Buffer.from(value, "base64");
   if (bytes.length > MAX_SNAPSHOT_BYTES) fail("OBJECT_TOO_LARGE", `Bundle object ${digest} exceeds ${MAX_SNAPSHOT_BYTES} bytes.`);
@@ -64,9 +83,19 @@ export function validateBundle(bundle) {
   }
   if (bundle.format !== BUNDLE_FORMAT) fail("INVALID_BUNDLE", `bundle.format must equal ${BUNDLE_FORMAT}.`);
   if (bundle.schemaVersion !== SCHEMA_VERSION) fail("UNSUPPORTED_SCHEMA", `bundle.schemaVersion must equal ${SCHEMA_VERSION}.`);
+  if (!Array.isArray(bundle.snapshots) || !Array.isArray(bundle.claims)) fail("INVALID_BUNDLE", "bundle.snapshots and bundle.claims must be arrays.");
+  if (bundle.snapshots.length > MAX_BUNDLE_ITEMS || bundle.claims.length > MAX_BUNDLE_ITEMS) {
+    fail("INVALID_BUNDLE", `Bundle snapshot and claim counts must not exceed ${MAX_BUNDLE_ITEMS}.`);
+  }
+  let evidenceLinks = 0;
+  for (const claim of bundle.claims) {
+    if (claim && typeof claim === "object" && Array.isArray(claim.evidence)) evidenceLinks += claim.evidence.length;
+    if (evidenceLinks > MAX_BUNDLE_EVIDENCE_LINKS) {
+      fail("VERIFICATION_WORK_LIMIT", `Bundle evidence links must not exceed ${MAX_BUNDLE_EVIDENCE_LINKS}.`);
+    }
+  }
   validateWorkspace(bundle.workspace);
   validateCollections(bundle.snapshots, bundle.claims);
-  if (bundle.snapshots.length > 10_000 || bundle.claims.length > 10_000) fail("INVALID_BUNDLE", "Bundle item count exceeds 10,000.");
   const encodedObjects = plainObject(bundle.objects, "bundle.objects");
   const objects = new Map();
   for (const [digest, encoded] of Object.entries(encodedObjects)) {
@@ -84,12 +113,23 @@ export function validateBundle(bundle) {
     referenced.add(snapshot.sha256);
     snapshotsById.set(snapshot.id, snapshot);
   }
+  const selectorChecks = new Map();
+  let verificationWork = 0;
   for (const claim of bundle.claims) {
     for (const evidence of claim.evidence) {
       const snapshot = snapshotsById.get(evidence.snapshotId);
-      verifyTextSelector(objects.get(snapshot.sha256), evidence.selector);
+      const key = `${snapshot.sha256}\n${canonicalJson(evidence.selector)}`;
+      if (!selectorChecks.has(key)) {
+        const bytes = objects.get(snapshot.sha256);
+        verificationWork += bytes.length;
+        if (verificationWork > MAX_VERIFICATION_WORK_BYTES) {
+          fail("VERIFICATION_WORK_LIMIT", `Bundle selector verification exceeds ${MAX_VERIFICATION_WORK_BYTES} byte-checks.`);
+        }
+        selectorChecks.set(key, { bytes, selector: evidence.selector });
+      }
     }
   }
+  for (const { bytes, selector } of selectorChecks.values()) verifyTextSelector(bytes, selector);
   for (const digest of objects.keys()) {
     if (!referenced.has(digest)) fail("UNREFERENCED_OBJECT", `Bundle object ${digest} is not referenced by a snapshot.`);
   }
@@ -134,11 +174,15 @@ export async function readBundle(file) {
   const bytes = await readFile(resolved);
   let bundle;
   try {
-    bundle = JSON.parse(bytes.toString("utf8"));
+    bundle = JSON.parse(decodeUtf8(bytes, "evidence bundle"));
   } catch (error) {
+    if (error.code === "INVALID_UTF8") throw error;
     fail("INVALID_BUNDLE", `${resolved} is not valid JSON: ${error.message}`);
   }
   const report = validateBundle(bundle);
+  if (!bytes.equals(Buffer.from(canonicalJson(bundle), "utf8"))) {
+    fail("NON_CANONICAL_BUNDLE", `${resolved} is not canonical ClaimLineage JSON.`);
+  }
   return { resolved, bytes, bundle, report };
 }
 

@@ -14,7 +14,14 @@ claimlineage verify [--workspace <directory>] [--format text|json]
 claimlineage check <snapshot-id> [--workspace <directory>] [--format text|json]
 ```
 
-`--workspace` defaults to the current directory. `check` returns `unchanged`, `changed`, `unavailable`, or `unsupported`. Only `changed` uses exit code `1`; invalid data or an invalid operation uses `2`.
+`--workspace` defaults to the current directory. `check` returns `unchanged`, `changed`, `unavailable`, or `unsupported`.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Operation succeeded, or a source was confirmed unchanged |
+| `1` | A checked source changed |
+| `2` | Input, data, or the requested operation was invalid |
+| `3` | A source was unavailable or its source type cannot be checked |
 
 ## Bundle commands
 

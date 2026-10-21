@@ -12,7 +12,7 @@ The workspace data directory is exactly `.claimlineage/`.
    └─ <64 lowercase hexadecimal SHA-256 characters>
 ```
 
-All JSON documents use UTF-8, schema version `1`, sorted object keys, two-space indentation, and one trailing line feed. Metadata updates use write-to-temporary-file followed by an atomic rename. Snapshot objects are immutable and addressed by their SHA-256 digest.
+All JSON documents use UTF-8, schema version `1`, sorted object keys, two-space indentation, and one trailing line feed. Snapshot metadata updates are journaled before write-to-temporary-file and atomic rename; an interrupted operation is completed or rolled back on the next load. Snapshot objects are immutable and addressed by their SHA-256 digest.
 
 `local-sources.json` contains machine-local absolute file paths used only for drift checks. It is never included in an evidence bundle or returned by the web API.
 

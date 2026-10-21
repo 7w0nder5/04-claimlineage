@@ -182,12 +182,24 @@ for (const [active, inactive, form, otherForm] of [
   active.addEventListener("click", () => {
     active.classList.add("active");
     active.setAttribute("aria-selected", "true");
+    active.tabIndex = 0;
     inactive.classList.remove("active");
     inactive.setAttribute("aria-selected", "false");
+    inactive.tabIndex = -1;
     form.hidden = false;
     otherForm.hidden = true;
   });
 }
+
+const sourceTabs = [element("file-tab"), element("url-tab")];
+sourceTabs.forEach((tab, index) => tab.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  const direction = event.key === "ArrowRight" ? 1 : -1;
+  const next = sourceTabs[(index + direction + sourceTabs.length) % sourceTabs.length];
+  next.click();
+  next.focus();
+}));
 
 element("file-form").addEventListener("submit", async (event) => {
   event.preventDefault();

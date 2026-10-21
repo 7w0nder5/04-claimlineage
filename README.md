@@ -76,12 +76,12 @@ Open the printed loopback URL. The server binds only to `127.0.0.1`, creates a f
 | `bundle import <file> <directory>` | Restore a verified bundle into a new workspace |
 | `serve [--port <number>]` | Start the loopback-only web interface |
 
-Exit code `0` means success or no detected drift, `1` means a checked source changed, and `2` means the request or data was invalid. See [CLI reference](docs/CLI.md) for the exact forms.
+Exit code `0` means success or a source was confirmed unchanged, `1` means a checked source changed, `2` means the request or data was invalid, and `3` means a source could not be checked. See [CLI reference](docs/CLI.md) for the exact forms.
 
 ## Integrity and network boundaries
 
 - Snapshots are immutable and addressed by lowercase SHA-256.
-- Metadata writes use a workspace lock, temporary file, file sync, and atomic rename.
+- Metadata writes use a workspace lock, a recovery journal, temporary files, file sync, and atomic rename. Bundle import builds and verifies a staging workspace before publishing it.
 - Existing workspaces and bundle output files are never overwritten.
 - Every redirect target is validated and resolved again. If any returned IP address is private, loopback, link-local, reserved, documentation-only, or multicast, capture stops.
 - HTTPS-to-HTTP redirects, URL credentials, compressed responses, responses over 10 MiB, and more than five redirects are rejected.
@@ -105,9 +105,10 @@ The workspace format and `.clb` bundle format are documented, versioned, determi
 npm test
 npm run check
 npm run test:coverage
+npm run test:coverage:gate
 ```
 
-The suite covers canonical JSON, UTF-8 and byte-order marks, exact quote selection, duplicate and missing references, object tampering, locks, source drift, deterministic round trips, network address policy, redirect safety, size and encoding limits, CLI exit codes, web security boundaries, and Unicode or space-containing paths. CI runs on Linux, Windows, and macOS with Node.js 20 and 24.
+The suite covers canonical JSON, UTF-8 and byte-order marks, exact quote selection, duplicate and missing references, object tampering, transaction recovery, source drift, deterministic round trips, verification work limits, network address policy, redirect safety, size and encoding limits, CLI exit codes, web security boundaries, and Unicode or space-containing paths. CI runs on Linux, Windows, and macOS with Node.js 20 and 24; Node.js 24 also enforces 90% line, 75% branch, and 85% function coverage.
 
 ## Project status
 

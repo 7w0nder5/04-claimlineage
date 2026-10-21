@@ -23,4 +23,6 @@ jobs:
           package-manager-cache: false
       - run: npm ci --ignore-scripts
       - run: npm test
+      - if: matrix.node == 24
+        run: npm run test:coverage:gate
       - run: npm run check

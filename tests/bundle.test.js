@@ -4,7 +4,15 @@ import path from "node:path";
 import test from "node:test";
 import { importUpload } from "../packages/capture/src/file.js";
 import { addClaim, initWorkspace, loadWorkspace } from "../packages/storage/src/workspace.js";
-import { exportBundle, importBundle, validateBundle, verifyBundleFile } from "../packages/export/src/bundle.js";
+import {
+  BUNDLE_FORMAT,
+  MAX_BUNDLE_EVIDENCE_LINKS,
+  MAX_VERIFICATION_WORK_BYTES,
+  exportBundle,
+  importBundle,
+  validateBundle,
+  verifyBundleFile,
+} from "../packages/export/src/bundle.js";
 import { sha256 } from "../packages/core/src/index.js";
 import { temporaryDirectory } from "./helpers.js";
 
@@ -71,6 +79,75 @@ test("bundle verification rejects undocumented top-level fields", async (t) => {
   const bundle = JSON.parse(await readFile(file, "utf8"));
   bundle.localPath = "must-not-pass";
   assert.throws(() => validateBundle(bundle), /localPath is not a supported field/);
+});
+
+test("bundle reader rejects malformed UTF-8, duplicate keys, and non-canonical JSON", async (t) => {
+  const folder = await temporaryDirectory(t);
+  const malformed = path.join(folder, "malformed.clb");
+  await writeFile(malformed, Buffer.from([0xff]));
+  await assert.rejects(() => verifyBundleFile(malformed), (error) => error.code === "INVALID_UTF8");
+
+  const root = await populatedWorkspace(t);
+  const valid = path.join(folder, "valid.clb");
+  await exportBundle(root, valid);
+  const text = await readFile(valid, "utf8");
+  const duplicate = path.join(folder, "duplicate.clb");
+  await writeFile(duplicate, text.replace('"format": "claimlineage-bundle"', '"format": "wrong",\n  "format": "claimlineage-bundle"'));
+  await assert.rejects(() => verifyBundleFile(duplicate), (error) => error.code === "NON_CANONICAL_BUNDLE");
+  const minified = path.join(folder, "minified.clb");
+  await writeFile(minified, JSON.stringify(JSON.parse(text)));
+  await assert.rejects(() => verifyBundleFile(minified), (error) => error.code === "NON_CANONICAL_BUNDLE");
+});
+
+test("bundle rejects excessive evidence count before deep record validation", () => {
+  const bundle = {
+    format: BUNDLE_FORMAT,
+    schemaVersion: 1,
+    workspace: {},
+    snapshots: [],
+    claims: [{ evidence: new Array(MAX_BUNDLE_EVIDENCE_LINKS + 1).fill(null) }],
+    objects: {},
+  };
+  assert.throws(() => validateBundle(bundle), (error) => error.code === "VERIFICATION_WORK_LIMIT");
+});
+
+test("bundle bounds unique selector verification work before scanning snapshots", () => {
+  const bytes = Buffer.alloc(10 * 1024 * 1024, 0x78);
+  const digest = sha256(bytes);
+  const snapshotId = "00000000-0000-4000-8000-000000000002";
+  const checks = Math.floor(MAX_VERIFICATION_WORK_BYTES / bytes.length) + 1;
+  const claims = Array.from({ length: checks }, (_, index) => ({
+    schemaVersion: 1,
+    id: `00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}`,
+    statement: `Claim ${index}`,
+    createdAt: "2026-01-02T03:04:05.000Z",
+    evidence: [{
+      snapshotId,
+      selector: { type: "TextQuoteSelector", exact: "x", prefix: String(index), suffix: "", startByte: 0, endByte: 1 },
+    }],
+  }));
+  const bundle = {
+    format: BUNDLE_FORMAT,
+    schemaVersion: 1,
+    workspace: {
+      schemaVersion: 1,
+      id: "00000000-0000-4000-8000-000000000001",
+      name: "Work bound",
+      createdAt: "2026-01-02T03:04:05.000Z",
+    },
+    snapshots: [{
+      schemaVersion: 1,
+      id: snapshotId,
+      capturedAt: "2026-01-02T03:04:05.000Z",
+      mediaType: "text/plain",
+      byteLength: bytes.length,
+      sha256: digest,
+      source: { type: "upload", label: "large.txt" },
+    }],
+    claims,
+    objects: { [digest]: bytes.toString("base64") },
+  };
+  assert.throws(() => validateBundle(bundle), (error) => error.code === "VERIFICATION_WORK_LIMIT");
 });
 
 test("bundle round-trip preserves workspace data and bytes", async (t) => {

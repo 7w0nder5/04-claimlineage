@@ -9,8 +9,10 @@ import {
   currentSourceBytes,
   initWorkspace,
   loadWorkspace,
+  replaceWorkspaceData,
   verifyWorkspace,
 } from "../packages/storage/src/workspace.js";
+import { sha256 } from "../packages/core/src/index.js";
 import { fixedIdentity, temporaryDirectory } from "./helpers.js";
 
 test("workspace initialization creates the exact private data layout", async (t) => {
@@ -77,6 +79,77 @@ test("workspace verification detects object tampering and unexpected entries", a
   await initWorkspace(other);
   await writeFile(path.join(other, ".claimlineage", "objects", "unexpected"), "x");
   await assert.rejects(() => verifyWorkspace(other), (error) => error.code === "UNSAFE_OBJECT");
+});
+
+test("workspace verification rejects corrupt and valid unreferenced objects", async (t) => {
+  const corruptRoot = await temporaryDirectory(t);
+  await initWorkspace(corruptRoot);
+  const declared = sha256(Buffer.from("declared"));
+  await writeFile(path.join(corruptRoot, ".claimlineage", "objects", declared), "different");
+  await assert.rejects(() => verifyWorkspace(corruptRoot), (error) => error.code === "OBJECT_HASH_MISMATCH");
+
+  const validRoot = await temporaryDirectory(t);
+  await initWorkspace(validRoot);
+  const bytes = Buffer.from("unreferenced");
+  await writeFile(path.join(validRoot, ".claimlineage", "objects", sha256(bytes)), bytes);
+  await assert.rejects(() => verifyWorkspace(validRoot), (error) => error.code === "ORPHAN_OBJECT");
+});
+
+test("snapshot journal recovers or rolls back every interrupted write stage", async (t) => {
+  for (const step of ["journal", "object", "snapshots", "localSources"]) {
+    const root = await temporaryDirectory(t, `claimlineage-${step}-`);
+    await initWorkspace(root);
+    await assert.rejects(
+      () => addSnapshot(root, {
+        bytes: Buffer.from(`bytes-${step}`),
+        mediaType: "text/plain",
+        source: { type: "upload", label: `${step}.txt` },
+        onTransactionStep(current) {
+          if (current === step) throw new Error(`interrupted after ${step}`);
+        },
+      }),
+      new RegExp(`interrupted after ${step}`),
+    );
+    const state = await loadWorkspace(root);
+    assert.equal(state.snapshots.length, step === "journal" ? 0 : 1, step);
+    assert.equal(await import("node:fs/promises").then(({ stat }) => stat(path.join(root, ".claimlineage", "transaction.json")).then(() => true, () => false)), false);
+    assert.equal((await verifyWorkspace(root)).valid, true);
+  }
+});
+
+test("staged workspace import leaves no published partial workspace on write failure", async (t) => {
+  const parent = await temporaryDirectory(t);
+  const bytes = Buffer.from("portable");
+  const digest = sha256(bytes);
+  const data = {
+    workspace: {
+      schemaVersion: 1,
+      id: "00000000-0000-4000-8000-000000000001",
+      name: "Staged import",
+      createdAt: "2026-01-02T03:04:05.000Z",
+    },
+    snapshots: [{
+      schemaVersion: 1,
+      id: "00000000-0000-4000-8000-000000000002",
+      capturedAt: "2026-01-02T03:04:05.000Z",
+      mediaType: "text/plain",
+      byteLength: bytes.length,
+      sha256: digest,
+      source: { type: "upload", label: "portable.txt" },
+    }],
+    claims: [],
+    objects: new Map([[digest, bytes]]),
+  };
+  for (const step of ["directories", "objects", "workspace", "snapshots", "claims", "localSources", "verified"]) {
+    const destination = path.join(parent, step);
+    await assert.rejects(
+      () => replaceWorkspaceData(destination, data, { onImportStep(current) { if (current === step) throw new Error(step); } }),
+      new RegExp(step),
+    );
+    assert.equal(await import("node:fs/promises").then(({ stat }) => stat(path.join(destination, ".claimlineage")).then(() => true, () => false)), false, step);
+    await replaceWorkspaceData(destination, data);
+    assert.equal((await verifyWorkspace(destination)).snapshots, 1);
+  }
 });
 
 test("write lock prevents concurrent metadata mutation", async (t) => {

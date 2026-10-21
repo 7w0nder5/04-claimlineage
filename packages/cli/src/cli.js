@@ -34,7 +34,16 @@ Usage:
   claimlineage bundle import <input.clb> <directory>
   claimlineage serve [--workspace <directory>] [--port <number>]
 
-Exit codes: 0 success or unchanged, 1 source changed, 2 invalid input or operation failure.`;
+Exit codes: 0 success or unchanged, 1 source changed, 2 invalid input or operation failure, 3 source unavailable or unsupported.`;
+
+function terminalText(value) {
+  return String(value).replace(/[\u0000-\u001f\u007f-\u009f]/g, (character) => {
+    if (character === "\n") return "\\n";
+    if (character === "\r") return "\\r";
+    if (character === "\t") return "\\t";
+    return `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`;
+  });
+}
 
 function formatValue(value, format) {
   return format === "json" ? JSON.stringify(value, null, 2) : value;
@@ -65,7 +74,7 @@ async function checkSource(workspaceRoot, snapshotId) {
     const currentHash = sha256(current.bytes);
     return { snapshotId, sourceType: "http", status: currentHash === snapshot.sha256 ? "unchanged" : "changed", recordedSha256: snapshot.sha256, currentSha256: currentHash, finalUrl: current.source.finalUrl };
   }
-  return { snapshotId, sourceType: snapshot.source.type, status: "unavailable", recordedSha256: snapshot.sha256, currentSha256: null };
+  return { snapshotId, sourceType: snapshot.source.type, status: "unsupported", recordedSha256: snapshot.sha256, currentSha256: null };
 }
 
 export async function main(arguments_ = process.argv.slice(2), io = process) {
@@ -88,7 +97,7 @@ export async function main(arguments_ = process.argv.slice(2), io = process) {
       const name = takeFlag(parsed.flags, "name");
       rejectFlags(parsed.flags);
       const result = await initWorkspace(parsed.positionals[0], { name });
-      io.stdout.write(`Initialized ClaimLineage workspace ${result.workspace.id} at ${result.root}\n`);
+      io.stdout.write(`Initialized ClaimLineage workspace ${terminalText(result.workspace.id)} at ${terminalText(result.root)}\n`);
       return 0;
     }
 
@@ -96,7 +105,7 @@ export async function main(arguments_ = process.argv.slice(2), io = process) {
       expectPositionals(parsed.positionals, 1, "one source file");
       rejectFlags(parsed.flags);
       const snapshot = await importFile(workspaceRoot, parsed.positionals[0]);
-      io.stdout.write(`Imported ${snapshot.source.label} as snapshot ${snapshot.id} (${snapshot.sha256})\n`);
+      io.stdout.write(`Imported ${terminalText(snapshot.source.label)} as snapshot ${terminalText(snapshot.id)} (${terminalText(snapshot.sha256)})\n`);
       return 0;
     }
 
@@ -104,7 +113,7 @@ export async function main(arguments_ = process.argv.slice(2), io = process) {
       expectPositionals(parsed.positionals, 1, "one HTTP or HTTPS URL");
       rejectFlags(parsed.flags);
       const snapshot = await captureHttp(workspaceRoot, parsed.positionals[0]);
-      io.stdout.write(`Captured ${snapshot.source.finalUrl} as snapshot ${snapshot.id} (${snapshot.sha256})\n`);
+      io.stdout.write(`Captured ${terminalText(snapshot.source.finalUrl)} as snapshot ${terminalText(snapshot.id)} (${terminalText(snapshot.sha256)})\n`);
       return 0;
     }
 
@@ -115,7 +124,7 @@ export async function main(arguments_ = process.argv.slice(2), io = process) {
       const quote = takeFlag(parsed.flags, "quote");
       rejectFlags(parsed.flags);
       const claim = await addClaim(workspaceRoot, { statement, snapshotId, quote });
-      io.stdout.write(`Created claim ${claim.id} with evidence from snapshot ${snapshotId}\n`);
+      io.stdout.write(`Created claim ${terminalText(claim.id)} with evidence from snapshot ${terminalText(snapshotId)}\n`);
       return 0;
     }
 
@@ -127,9 +136,9 @@ export async function main(arguments_ = process.argv.slice(2), io = process) {
       if (format === "json") {
         io.stdout.write(`${formatValue({ workspace: state.workspace, snapshots: state.snapshots, claims: state.claims }, format)}\n`);
       } else {
-        io.stdout.write(`${state.workspace.name}: ${state.snapshots.length} snapshot(s), ${state.claims.length} claim(s)\n`);
-        for (const snapshot of state.snapshots) io.stdout.write(`S ${snapshot.id} ${snapshot.source.label} ${snapshot.sha256}\n`);
-        for (const claim of state.claims) io.stdout.write(`C ${claim.id} ${claim.statement}\n`);
+        io.stdout.write(`${terminalText(state.workspace.name)}: ${state.snapshots.length} snapshot(s), ${state.claims.length} claim(s)\n`);
+        for (const snapshot of state.snapshots) io.stdout.write(`S ${terminalText(snapshot.id)} ${terminalText(snapshot.source.label)} ${terminalText(snapshot.sha256)}\n`);
+        for (const claim of state.claims) io.stdout.write(`C ${terminalText(claim.id)} ${terminalText(claim.statement)}\n`);
       }
       return 0;
     }
@@ -148,8 +157,10 @@ export async function main(arguments_ = process.argv.slice(2), io = process) {
       const format = parseFormat(parsed.flags);
       rejectFlags(parsed.flags);
       const report = await checkSource(workspaceRoot, parsed.positionals[0]);
-      io.stdout.write(format === "json" ? `${JSON.stringify(report, null, 2)}\n` : `Source ${report.status}: ${report.snapshotId}\n`);
-      return report.status === "changed" ? 1 : 0;
+      io.stdout.write(format === "json" ? `${JSON.stringify(report, null, 2)}\n` : `Source ${terminalText(report.status)}: ${terminalText(report.snapshotId)}\n`);
+      if (report.status === "changed") return 1;
+      if (report.status === "unavailable" || report.status === "unsupported") return 3;
+      return 0;
     }
 
     if (command === "bundle") {
@@ -158,7 +169,7 @@ export async function main(arguments_ = process.argv.slice(2), io = process) {
         expectPositionals(parsed.positionals, 2, "bundle export and one output file");
         rejectFlags(parsed.flags);
         const result = await exportBundle(workspaceRoot, parsed.positionals[1]);
-        io.stdout.write(`Exported ${result.output} (${result.byteLength} bytes, ${result.sha256})\n`);
+        io.stdout.write(`Exported ${terminalText(result.output)} (${result.byteLength} bytes, ${terminalText(result.sha256)})\n`);
         return 0;
       }
       if (action === "verify") {
@@ -173,7 +184,7 @@ export async function main(arguments_ = process.argv.slice(2), io = process) {
         expectPositionals(parsed.positionals, 3, "bundle import, one input file, and one destination directory");
         rejectFlags(parsed.flags);
         const result = await importBundle(parsed.positionals[1], parsed.positionals[2]);
-        io.stdout.write(`Imported workspace ${result.workspaceId} at ${result.root}\n`);
+        io.stdout.write(`Imported workspace ${terminalText(result.workspaceId)} at ${terminalText(result.root)}\n`);
         return 0;
       }
       throw new ClaimLineageError("INVALID_ARGUMENT", "Expected bundle export, bundle verify, or bundle import.");
@@ -184,17 +195,17 @@ export async function main(arguments_ = process.argv.slice(2), io = process) {
       const port = parsePort(takeFlag(parsed.flags, "port", "4177"));
       rejectFlags(parsed.flags);
       const { origin } = await startWebServer(workspaceRoot, { port });
-      io.stdout.write(`ClaimLineage is available at ${origin}\nPress Ctrl+C to stop.\n`);
+      io.stdout.write(`ClaimLineage is available at ${terminalText(origin)}\nPress Ctrl+C to stop.\n`);
       return await new Promise(() => {});
     }
 
     throw new ClaimLineageError("UNKNOWN_COMMAND", `Unknown command ${JSON.stringify(command)}.`);
   } catch (error) {
     if (error instanceof ClaimLineageError) {
-      io.stderr.write(`claimlineage: ${error.message} [${error.code}]\n`);
+      io.stderr.write(`claimlineage: ${terminalText(error.message)} [${terminalText(error.code)}]\n`);
       return 2;
     }
-    io.stderr.write(`claimlineage: unexpected failure: ${error.message}\n`);
+    io.stderr.write(`claimlineage: unexpected failure: ${terminalText(error.message)}\n`);
     return 2;
   }
 }

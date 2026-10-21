@@ -17,7 +17,7 @@ test("capture URL accepts only credential-free HTTP and HTTPS", () => {
 });
 
 test("public address policy rejects loopback, private, documentation, and mapped ranges", () => {
-  for (const address of ["127.0.0.1", "10.1.2.3", "169.254.1.1", "192.168.1.1", "198.51.100.4", "::1", "fc00::1", "fe80::1", "fec0::1", "2002::1", "3fff::1", "5f00::1", "::ffff:127.0.0.1"]) {
+  for (const address of ["127.0.0.1", "10.1.2.3", "169.254.1.1", "192.88.99.2", "192.168.1.1", "198.51.100.4", "::1", "fc00::1", "fe80::1", "fec0::1", "2002::1", "3fff::1", "5f00::1", "::ffff:127.0.0.1"]) {
     assert.equal(isPublicAddress(address), false, address);
   }
   assert.equal(isPublicAddress("8.8.8.8"), true);

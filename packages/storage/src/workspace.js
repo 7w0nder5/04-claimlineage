@@ -30,6 +30,7 @@ import {
 
 const DATA_DIRECTORY = ".claimlineage";
 const METADATA_LIMIT = 5 * 1024 * 1024;
+const TRANSACTION_LIMIT = 12 * 1024 * 1024;
 
 function locations(root) {
   const resolvedRoot = path.resolve(root);
@@ -43,10 +44,11 @@ function locations(root) {
     localSources: path.join(data, "local-sources.json"),
     objects: path.join(data, "objects"),
     lock: path.join(data, "write.lock"),
+    transaction: path.join(data, "transaction.json"),
   };
 }
 
-async function ensureRegularFile(file, label) {
+async function ensureRegularFile(file, label, maximum = METADATA_LIMIT) {
   let info;
   try {
     info = await lstat(file);
@@ -55,7 +57,7 @@ async function ensureRegularFile(file, label) {
     throw error;
   }
   if (info.isSymbolicLink() || !info.isFile()) fail("UNSAFE_WORKSPACE_FILE", `${label} must be a regular file, not a symbolic link.`);
-  if (info.size > METADATA_LIMIT) fail("METADATA_TOO_LARGE", `${label} exceeds ${METADATA_LIMIT} bytes.`);
+  if (info.size > maximum) fail("METADATA_TOO_LARGE", `${label} exceeds ${maximum} bytes.`);
   return info;
 }
 
@@ -70,8 +72,8 @@ async function ensureDirectory(directory, label) {
   if (info.isSymbolicLink() || !info.isDirectory()) fail("UNSAFE_WORKSPACE_DIRECTORY", `${label} must be a directory, not a symbolic link.`);
 }
 
-async function readJson(file, label) {
-  await ensureRegularFile(file, label);
+async function readJson(file, label, maximum = METADATA_LIMIT) {
+  await ensureRegularFile(file, label, maximum);
   let value;
   try {
     value = JSON.parse(await readFile(file, "utf8"));
@@ -79,6 +81,55 @@ async function readJson(file, label) {
     fail("INVALID_JSON", `${label} is not valid JSON: ${error.message}`);
   }
   return value;
+}
+
+async function recoverPendingSnapshotTransaction(place) {
+  let pending;
+  try {
+    pending = await lstat(place.transaction);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  if (pending.isSymbolicLink() || !pending.isFile()) fail("UNSAFE_TRANSACTION", "transaction.json must be a regular file.");
+  await withWriteLock(place, async () => {
+    const transaction = await readJson(place.transaction, "transaction.json", TRANSACTION_LIMIT);
+    if (transaction === null || typeof transaction !== "object" || Array.isArray(transaction) || Object.getPrototypeOf(transaction) !== Object.prototype) {
+      fail("INVALID_TRANSACTION", "transaction.json must contain an object.");
+    }
+    const keys = Object.keys(transaction).sort();
+    if (keys.join("\n") !== ["kind", "localSources", "schemaVersion", "snapshots"].sort().join("\n")
+      || transaction.schemaVersion !== SCHEMA_VERSION
+      || transaction.kind !== "snapshot-metadata") {
+      fail("INVALID_TRANSACTION", "transaction.json has an unsupported structure.");
+    }
+    const claims = await readJson(place.claims, "claims.json");
+    validateCollections(transaction.snapshots, claims);
+    validateLocalSources(transaction.localSources, new Set(transaction.snapshots.map((item) => item.id)));
+
+    let missingObject = false;
+    for (const snapshot of transaction.snapshots) {
+      try {
+        const bytes = await readObject(place, snapshot.sha256);
+        validateSnapshotBytes(snapshot, bytes);
+      } catch (error) {
+        if (error.code !== "MISSING_OBJECT") throw error;
+        missingObject = true;
+        break;
+      }
+    }
+    if (missingObject) {
+      const currentSnapshots = await readJson(place.snapshots, "snapshots.json");
+      if (canonicalJson(currentSnapshots) === canonicalJson(transaction.snapshots)) {
+        fail("INCOMPLETE_TRANSACTION", "Committed snapshot metadata refers to a missing object.");
+      }
+      await rm(place.transaction);
+      return;
+    }
+    await atomicWriteJson(place.snapshots, transaction.snapshots);
+    await atomicWriteJson(place.localSources, transaction.localSources);
+    await rm(place.transaction);
+  });
 }
 
 async function atomicWriteJson(file, value) {
@@ -130,13 +181,6 @@ function validateLocalSources(value, snapshotIds) {
 export async function initWorkspace(root, { name, idFactory = randomUUID, now = () => new Date() } = {}) {
   const place = locations(root);
   await mkdir(place.root, { recursive: true });
-  try {
-    await mkdir(place.data, { mode: 0o700 });
-  } catch (error) {
-    if (error.code === "EEXIST") fail("WORKSPACE_EXISTS", `${place.data} already exists; it was not changed.`);
-    throw error;
-  }
-  await mkdir(place.objects, { mode: 0o700 });
   const workspace = {
     schemaVersion: SCHEMA_VERSION,
     id: idFactory(),
@@ -144,10 +188,7 @@ export async function initWorkspace(root, { name, idFactory = randomUUID, now = 
     createdAt: now().toISOString(),
   };
   validateWorkspace(workspace);
-  await atomicWriteJson(place.workspace, workspace);
-  await atomicWriteJson(place.snapshots, []);
-  await atomicWriteJson(place.claims, []);
-  await atomicWriteJson(place.localSources, {});
+  await replaceWorkspaceData(place.root, { workspace, snapshots: [], claims: [], objects: new Map() });
   return { root: place.root, workspace };
 }
 
@@ -155,6 +196,7 @@ export async function loadWorkspace(root) {
   const place = locations(root);
   await ensureDirectory(place.data, place.data);
   await ensureDirectory(place.objects, "workspace objects directory");
+  await recoverPendingSnapshotTransaction(place);
   const [workspace, snapshots, claims, localSources] = await Promise.all([
     readJson(place.workspace, "workspace.json"),
     readJson(place.snapshots, "snapshots.json"),
@@ -213,6 +255,7 @@ export async function addSnapshot(root, {
   localPath,
   idFactory = randomUUID,
   now = () => new Date(),
+  onTransactionStep = async () => {},
 }) {
   if (!Buffer.isBuffer(bytes)) fail("INVALID_BYTES", "Snapshot content must be a Buffer.");
   if (bytes.length > MAX_SNAPSHOT_BYTES) fail("SNAPSHOT_TOO_LARGE", `Snapshot exceeds ${MAX_SNAPSHOT_BYTES} bytes.`);
@@ -235,12 +278,23 @@ export async function addSnapshot(root, {
   await withWriteLock(state.place, async () => {
     const current = await loadWorkspace(root);
     if (current.snapshots.some((item) => item.id === snapshot.id)) fail("DUPLICATE_ID", `Snapshot id ${snapshot.id} already exists.`);
+    const nextSnapshots = [...current.snapshots, snapshot].sort((left, right) => left.id.localeCompare(right.id));
+    const nextLocalSources = { ...current.localSources };
+    if (localPath) nextLocalSources[snapshot.id] = localPath;
+    await atomicWriteJson(current.place.transaction, {
+      schemaVersion: SCHEMA_VERSION,
+      kind: "snapshot-metadata",
+      snapshots: nextSnapshots,
+      localSources: nextLocalSources,
+    });
+    await onTransactionStep("journal");
     await writeObject(current.place, digest, bytes);
-    current.snapshots.push(snapshot);
-    current.snapshots.sort((left, right) => left.id.localeCompare(right.id));
-    if (localPath) current.localSources[snapshot.id] = localPath;
-    await atomicWriteJson(current.place.snapshots, current.snapshots);
-    await atomicWriteJson(current.place.localSources, current.localSources);
+    await onTransactionStep("object");
+    await atomicWriteJson(current.place.snapshots, nextSnapshots);
+    await onTransactionStep("snapshots");
+    await atomicWriteJson(current.place.localSources, nextLocalSources);
+    await onTransactionStep("localSources");
+    await rm(current.place.transaction);
   });
   return snapshot;
 }
@@ -296,15 +350,19 @@ export async function verifyWorkspace(root) {
   const orphanObjects = [];
   for (const entry of entries) {
     if (!entry.isFile() || entry.isSymbolicLink() || !isSha256(entry.name)) fail("UNSAFE_OBJECT", `Unexpected object entry ${entry.name}.`);
-    if (!referenced.has(entry.name)) orphanObjects.push(entry.name);
+    if (!referenced.has(entry.name)) {
+      const bytes = await readObject(state.place, entry.name);
+      if (sha256(bytes) !== entry.name) fail("OBJECT_HASH_MISMATCH", `Unreferenced object ${entry.name} failed SHA-256 verification.`);
+      orphanObjects.push(entry.name);
+    }
   }
+  if (orphanObjects.length) fail("ORPHAN_OBJECT", `Workspace contains ${orphanObjects.length} unreferenced object(s).`, { orphanObjects: orphanObjects.sort() });
   return {
     valid: true,
     workspaceId: state.workspace.id,
     snapshots: state.snapshots.length,
     claims: state.claims.length,
     objects: referenced.size,
-    orphanObjects: orphanObjects.sort(),
   };
 }
 
@@ -327,28 +385,46 @@ export async function currentSourceBytes(root, snapshotId) {
   return { snapshot, bytes, status: sha256(bytes) === snapshot.sha256 ? "unchanged" : "changed" };
 }
 
-export async function replaceWorkspaceData(root, { workspace, snapshots, claims, objects }) {
+export async function replaceWorkspaceData(root, { workspace, snapshots, claims, objects }, { onImportStep = async () => {} } = {}) {
   validateWorkspace(workspace);
   validateCollections(snapshots, claims);
   const place = locations(root);
   await mkdir(place.root, { recursive: true });
   try {
-    await mkdir(place.data, { mode: 0o700 });
+    await lstat(place.data);
+    fail("WORKSPACE_EXISTS", `${place.data} already exists; it was not changed.`);
   } catch (error) {
-    if (error.code === "EEXIST") fail("WORKSPACE_EXISTS", `${place.data} already exists; it was not changed.`);
+    if (error.code !== "ENOENT") throw error;
+  }
+  const stagingRoot = path.join(place.root, `.claimlineage-import-${randomUUID()}`);
+  const stagingPlace = locations(stagingRoot);
+  try {
+    await mkdir(stagingPlace.data, { recursive: true, mode: 0o700 });
+    await mkdir(stagingPlace.objects, { mode: 0o700 });
+    await onImportStep("directories");
+    for (const snapshot of snapshots) {
+      const bytes = objects.get(snapshot.sha256);
+      if (!bytes) fail("MISSING_OBJECT", `Bundle object ${snapshot.sha256} is missing.`);
+      validateSnapshotBytes(snapshot, bytes);
+      await writeObject(stagingPlace, snapshot.sha256, bytes);
+    }
+    await onImportStep("objects");
+    await atomicWriteJson(stagingPlace.workspace, workspace);
+    await onImportStep("workspace");
+    await atomicWriteJson(stagingPlace.snapshots, [...snapshots].sort((left, right) => left.id.localeCompare(right.id)));
+    await onImportStep("snapshots");
+    await atomicWriteJson(stagingPlace.claims, [...claims].sort((left, right) => left.id.localeCompare(right.id)));
+    await onImportStep("claims");
+    await atomicWriteJson(stagingPlace.localSources, {});
+    await onImportStep("localSources");
+    await verifyWorkspace(stagingRoot);
+    await onImportStep("verified");
+    await rename(stagingPlace.data, place.data);
+  } catch (error) {
+    await rm(stagingRoot, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
-  await mkdir(place.objects, { mode: 0o700 });
-  for (const snapshot of snapshots) {
-    const bytes = objects.get(snapshot.sha256);
-    if (!bytes) fail("MISSING_OBJECT", `Bundle object ${snapshot.sha256} is missing.`);
-    validateSnapshotBytes(snapshot, bytes);
-    await writeObject(place, snapshot.sha256, bytes);
-  }
-  await atomicWriteJson(place.workspace, workspace);
-  await atomicWriteJson(place.snapshots, [...snapshots].sort((left, right) => left.id.localeCompare(right.id)));
-  await atomicWriteJson(place.claims, [...claims].sort((left, right) => left.id.localeCompare(right.id)));
-  await atomicWriteJson(place.localSources, {});
+  await rm(stagingRoot, { recursive: true, force: true });
   await verifyWorkspace(root);
   return { root: place.root, workspace };
 }

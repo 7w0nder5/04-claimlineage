@@ -47,7 +47,7 @@ node packages/cli/src/cli.js serve --workspace demo
 ## 可靠性边界
 
 - 工作区和输出文件均不覆盖已有内容。
-- 元数据写入使用互斥锁、临时文件、同步和原子重命名。
+- 元数据写入使用互斥锁、恢复日志、临时文件、同步和原子重命名；证据包先在暂存工作区中完成写入与校验，再发布到目标位置。
 - 每次重定向都会重新校验协议并重新解析地址；任一解析结果属于私有、回环、链路本地、保留、文档或组播地址时立即停止。
 - 拒绝 URL 凭据、HTTPS 降级、压缩响应、超过 10 MiB 的响应和超过五次的重定向。
 - 证据包拒绝缺失、损坏、格式错误或未引用的对象，并限制为 64 MiB。
@@ -61,6 +61,7 @@ node packages/cli/src/cli.js serve --workspace demo
 npm test
 npm run check
 npm run test:coverage
+npm run test:coverage:gate
 ```
 
 测试覆盖规范化 JSON、UTF-8 与字节序标记、精确引文、引用完整性、对象篡改、并发写入锁、来源漂移、确定性导入导出、网络地址策略、重定向、体积与编码限制、命令行退出码以及网页安全边界。CI 在 Linux、Windows、macOS 的 Node.js 20 和 24 上运行。
@@ -72,6 +73,8 @@ npm run test:coverage
 - [证据包格式](docs/BUNDLE_FORMAT.md)
 - [长期路线图](docs/ROADMAP.md)
 - [贡献说明](CONTRIBUTING.md)
+
+退出码 `0` 表示操作成功或已确认来源未变化，`1` 表示来源已变化，`2` 表示输入或操作无效，`3` 表示来源无法检查。
 
 ## 许可证
 

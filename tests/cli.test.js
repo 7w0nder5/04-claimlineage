@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { main, VERSION } from "../packages/cli/src/cli.js";
 import { loadWorkspace } from "../packages/storage/src/workspace.js";
+import { importUpload } from "../packages/capture/src/file.js";
 import { memoryIo, temporaryDirectory } from "./helpers.js";
 
 async function run(args) {
@@ -56,6 +57,8 @@ test("CLI completes init, import, claim, verify, drift, export, verify, and impo
   assert.match((await run(["check", snapshotId, "--workspace", root])).stdout, /unchanged/);
   await writeFile(source, "Changed source.\n");
   assert.equal((await run(["check", snapshotId, "--workspace", root])).code, 1);
+  await rm(source);
+  assert.equal((await run(["check", snapshotId, "--workspace", root])).code, 3);
 
   const bundle = path.join(parent, "evidence.clb");
   const restored = path.join(parent, "restored");
@@ -66,6 +69,40 @@ test("CLI completes init, import, claim, verify, drift, export, verify, and impo
     JSON.parse(await readFile(path.join(root, ".claimlineage", "claims.json"), "utf8")),
     JSON.parse(await readFile(path.join(restored, ".claimlineage", "claims.json"), "utf8")),
   );
+});
+
+test("CLI check uses code 3 when a snapshot source type cannot be checked", async (t) => {
+  const root = await temporaryDirectory(t);
+  await run(["init", root]);
+  const snapshot = await importUpload(root, { bytes: Buffer.from("upload"), name: "upload.txt" });
+  const result = await run(["check", snapshot.id, "--workspace", root]);
+  assert.equal(result.code, 3);
+  assert.match(result.stdout, /unsupported/);
+});
+
+test("human-readable CLI output escapes stored control characters", async (t) => {
+  const parent = await temporaryDirectory(t);
+  const root = path.join(parent, "workspace");
+  const source = path.join(parent, "source.txt");
+  await writeFile(source, "exact quote");
+  await run(["init", root, "--name", "name\u001b\nline"]);
+  await run(["import", source, "--workspace", root]);
+  const snapshot = (await loadWorkspace(root)).snapshots[0];
+  await run([
+    "claim", "add", "--workspace", root,
+    "--statement", "row\r\nnext\tcell\u001b",
+    "--snapshot", snapshot.id,
+    "--quote", "exact quote",
+  ]);
+  const text = (await run(["list", "--workspace", root])).stdout;
+  assert.equal(text.includes("\u001b"), false);
+  assert.equal(text.includes("\r"), false);
+  assert.equal(text.includes("\t"), false);
+  assert.match(text, /name\\u001b\\nline/);
+  assert.match(text, /row\\r\\nnext\\tcell\\u001b/);
+  const json = JSON.parse((await run(["list", "--workspace", root, "--format", "json"])).stdout);
+  assert.equal(json.workspace.name, "name\u001b\nline");
+  assert.equal(json.claims[0].statement, "row\r\nnext\tcell\u001b");
 });
 
 test("CLI returns code 2 for malformed claim and absent workspace", async (t) => {

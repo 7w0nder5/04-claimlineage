@@ -5,6 +5,7 @@
 - Only explicit `http:` and `https:` URLs are accepted.
 - Credentials in URLs are rejected.
 - Loopback, private, link-local, documentation, multicast, and reserved IP ranges are rejected for IPv4 and IPv6.
+- The address policy is checked against the current IANA IPv4 and IPv6 Special-Purpose Address Space registries before each release.
 - Every redirect is resolved and checked again, with at most five redirects.
 - An HTTPS capture cannot redirect to HTTP.
 - DNS is resolved before the request and the approved public address is pinned for the connection.
@@ -27,3 +28,5 @@
 - Symbolic links inside the managed data directory are rejected.
 - Existing workspaces and import destinations are never overwritten.
 - Object bytes are verified before reuse and during every workspace or bundle verification.
+- Unreferenced objects make workspace verification fail, even when their own digest is valid.
+- Bundle import is assembled and verified in a staging workspace, then published by a same-filesystem directory rename.

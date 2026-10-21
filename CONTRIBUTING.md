@@ -9,6 +9,7 @@ Node.js 20 or newer is required. The project has no runtime or development depen
 ```sh
 npm test
 npm run test:coverage
+npm run test:coverage:gate
 npm run check
 ```
 

@@ -16,6 +16,8 @@ Status: complete.
 
 Exit gate: deterministic round trip, tested corruption rejection, explicit security model, zero runtime dependencies.
 
+Release maintenance includes comparing the HTTP address policy with the current IANA IPv4 and IPv6 special-purpose registries.
+
 ## 0.2 — Review ergonomics
 
 - Multiple evidence links per claim through an explicit add/remove workflow

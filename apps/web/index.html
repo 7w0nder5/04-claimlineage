@@ -56,7 +56,7 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">Lineage ledger</p>
-              <h2 id="claims-heading">Claims and their evidence</h2>
+              <h2 id="claims-heading" tabindex="-1">Claims and their evidence</h2>
               <p>Every claim below points to an exact quote inside an immutable snapshot.</p>
             </div>
             <button class="button primary" data-open-view="add" type="button">Add claim</button>
@@ -79,7 +79,7 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">Immutable archive</p>
-              <h2 id="sources-heading">Source snapshots</h2>
+              <h2 id="sources-heading" tabindex="-1">Source snapshots</h2>
               <p>Saved bytes never change in place, even when the original source does.</p>
             </div>
             <button class="button primary" data-open-view="add" type="button">Add source</button>
@@ -96,7 +96,7 @@
           <div class="section-heading compact">
             <div>
               <p class="eyebrow">Guided workflow</p>
-              <h2 id="add-heading">Add evidence</h2>
+              <h2 id="add-heading" tabindex="-1">Add evidence</h2>
               <p>Save a source first, then connect one unambiguous quote to a claim.</p>
             </div>
           </div>
@@ -105,10 +105,10 @@
             <section class="panel">
               <div class="step"><span>1</span><div><h3>Save a snapshot</h3><p>Files stay on this machine. Remote capture sends no cookies or credentials.</p></div></div>
               <div class="tab-row" role="tablist" aria-label="Source type">
-                <button id="file-tab" class="tab active" type="button" role="tab" aria-selected="true">Local file</button>
-                <button id="url-tab" class="tab" type="button" role="tab" aria-selected="false">Web page</button>
+                <button id="file-tab" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="file-form" tabindex="0">Local file</button>
+                <button id="url-tab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="url-form" tabindex="-1">Web page</button>
               </div>
-              <form id="file-form" class="form-stack">
+              <form id="file-form" class="form-stack" role="tabpanel" aria-labelledby="file-tab">
                 <label class="drop-zone" for="file-input">
                   <span class="drop-icon" aria-hidden="true">⇧</span>
                   <strong>Choose a source file</strong>
@@ -117,7 +117,7 @@
                 </label>
                 <button class="button primary wide" type="submit">Import immutable snapshot</button>
               </form>
-              <form id="url-form" class="form-stack" hidden>
+              <form id="url-form" class="form-stack" role="tabpanel" aria-labelledby="url-tab" hidden>
                 <label>Public HTTP or HTTPS URL
                   <input id="url-input" type="url" required maxlength="2048" placeholder="https://example.org/source">
                 </label>
