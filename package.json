@@ -1,0 +1,37 @@
+{
+  "name": "claimlineage",
+  "version": "0.1.0",
+  "description": "Connect claims to immutable source snapshots and export verifiable evidence bundles.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "claimlineage": "packages/cli/src/cli.js"
+  },
+  "files": [
+    "apps/web",
+    "docs",
+    "examples",
+    "packages",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "README.md",
+    "README.zh-CN.md",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage",
+    "check": "node scripts/check.js"
+  },
+  "keywords": [
+    "provenance",
+    "evidence",
+    "research",
+    "local-first",
+    "integrity"
+  ]
+}

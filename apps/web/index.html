@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="claimlineage-token" content="__SESSION_TOKEN__">
+    <title>ClaimLineage</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to workspace</a>
+    <header class="topbar">
+      <div class="brand" aria-label="ClaimLineage">
+        <span class="brand-mark" aria-hidden="true">CL</span>
+        <span>
+          <strong>ClaimLineage</strong>
+          <small>Evidence that survives the link</small>
+        </span>
+      </div>
+      <div class="top-actions">
+        <span class="privacy-pill"><span aria-hidden="true">●</span> Local only</span>
+        <button id="verify-button" class="button secondary" type="button">Verify workspace</button>
+      </div>
+    </header>
+
+    <main id="main" class="shell">
+      <aside class="sidebar" aria-label="Workspace navigation">
+        <section class="workspace-card">
+          <p class="eyebrow">Workspace</p>
+          <h1 id="workspace-name">Loading…</h1>
+          <p id="workspace-id" class="mono muted">—</p>
+          <div class="stats" aria-label="Workspace totals">
+            <div><strong id="snapshot-count">0</strong><span>Snapshots</span></div>
+            <div><strong id="claim-count">0</strong><span>Claims</span></div>
+          </div>
+        </section>
+
+        <nav class="section-nav" aria-label="Sections">
+          <button class="nav-item active" data-view="claims" type="button"><span aria-hidden="true">⌘</span> Claims</button>
+          <button class="nav-item" data-view="sources" type="button"><span aria-hidden="true">◇</span> Sources</button>
+          <button class="nav-item" data-view="add" type="button"><span aria-hidden="true">＋</span> Add evidence</button>
+        </nav>
+
+        <div class="principle-card">
+          <p class="eyebrow">Integrity, not truth</p>
+          <p>A matching digest proves the saved bytes are intact. It does not prove a source or claim is correct.</p>
+        </div>
+      </aside>
+
+      <section class="content">
+        <div id="status" class="status" role="status" aria-live="polite"></div>
+
+        <section id="view-claims" class="view active" aria-labelledby="claims-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Lineage ledger</p>
+              <h2 id="claims-heading">Claims and their evidence</h2>
+              <p>Every claim below points to an exact quote inside an immutable snapshot.</p>
+            </div>
+            <button class="button primary" data-open-view="add" type="button">Add claim</button>
+          </div>
+          <label class="search-box">
+            <span class="visually-hidden">Filter claims</span>
+            <span aria-hidden="true">⌕</span>
+            <input id="claim-filter" type="search" placeholder="Filter claims, sources, or quotes">
+          </label>
+          <div id="claim-list" class="card-list"></div>
+          <div id="claim-empty" class="empty-state" hidden>
+            <span class="empty-icon" aria-hidden="true">⌘</span>
+            <h3>No claims yet</h3>
+            <p>Import a source, then bind a precise quote to the statement it supports.</p>
+            <button class="button primary" data-open-view="add" type="button">Build the first lineage</button>
+          </div>
+        </section>
+
+        <section id="view-sources" class="view" aria-labelledby="sources-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Immutable archive</p>
+              <h2 id="sources-heading">Source snapshots</h2>
+              <p>Saved bytes never change in place, even when the original source does.</p>
+            </div>
+            <button class="button primary" data-open-view="add" type="button">Add source</button>
+          </div>
+          <div id="source-list" class="source-grid"></div>
+          <div id="source-empty" class="empty-state" hidden>
+            <span class="empty-icon" aria-hidden="true">◇</span>
+            <h3>No source snapshots</h3>
+            <p>Import a local file or explicitly capture one public HTTP or HTTPS page.</p>
+          </div>
+        </section>
+
+        <section id="view-add" class="view" aria-labelledby="add-heading">
+          <div class="section-heading compact">
+            <div>
+              <p class="eyebrow">Guided workflow</p>
+              <h2 id="add-heading">Add evidence</h2>
+              <p>Save a source first, then connect one unambiguous quote to a claim.</p>
+            </div>
+          </div>
+
+          <div class="workflow-grid">
+            <section class="panel">
+              <div class="step"><span>1</span><div><h3>Save a snapshot</h3><p>Files stay on this machine. Remote capture sends no cookies or credentials.</p></div></div>
+              <div class="tab-row" role="tablist" aria-label="Source type">
+                <button id="file-tab" class="tab active" type="button" role="tab" aria-selected="true">Local file</button>
+                <button id="url-tab" class="tab" type="button" role="tab" aria-selected="false">Web page</button>
+              </div>
+              <form id="file-form" class="form-stack">
+                <label class="drop-zone" for="file-input">
+                  <span class="drop-icon" aria-hidden="true">⇧</span>
+                  <strong>Choose a source file</strong>
+                  <span>Maximum 10 MiB · bytes are copied into the workspace</span>
+                  <input id="file-input" type="file" required>
+                </label>
+                <button class="button primary wide" type="submit">Import immutable snapshot</button>
+              </form>
+              <form id="url-form" class="form-stack" hidden>
+                <label>Public HTTP or HTTPS URL
+                  <input id="url-input" type="url" required maxlength="2048" placeholder="https://example.org/source">
+                </label>
+                <p class="field-note">Private, loopback, link-local, compressed, oversized, and unsafe redirect targets are rejected.</p>
+                <button class="button primary wide" type="submit">Capture immutable snapshot</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <div class="step"><span>2</span><div><h3>Connect a claim</h3><p>The quote must appear exactly once in the selected UTF-8 snapshot.</p></div></div>
+              <form id="claim-form" class="form-stack">
+                <label>Claim
+                  <textarea id="statement-input" required maxlength="2000" rows="4" placeholder="State the conclusion in your own words."></textarea>
+                </label>
+                <label>Source snapshot
+                  <select id="snapshot-select" required></select>
+                </label>
+                <label>Exact quote
+                  <textarea id="quote-input" required maxlength="4000" rows="7" placeholder="Paste the precise source passage that supports the claim."></textarea>
+                </label>
+                <button class="button primary wide" type="submit">Create claim lineage</button>
+              </form>
+            </section>
+          </div>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

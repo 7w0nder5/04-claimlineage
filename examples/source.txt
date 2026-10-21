@@ -1,0 +1,2 @@
+Archived sources preserve the exact evidence used by a claim.
+A matching digest proves integrity of stored bytes, not truth of the statement.
