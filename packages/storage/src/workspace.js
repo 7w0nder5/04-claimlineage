@@ -284,7 +284,7 @@ export async function addSnapshot(root, {
     source: { ...source },
   };
   if (source.type === "file" && localPath) {
-    const relativePath = relativeSourcePath(state.place.root, localPath);
+    const relativePath = relativeSourcePath(await realpath(state.place.root), localPath);
     if (relativePath) snapshot.source.relativePath = relativePath;
   }
   validateSnapshot(snapshot);
