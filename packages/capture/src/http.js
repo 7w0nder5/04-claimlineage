@@ -125,7 +125,7 @@ export function requestPinned(url, address, {
       headers: {
         Accept: "text/html, application/json, text/plain;q=0.9, */*;q=0.1",
         "Accept-Encoding": "identity",
-        "User-Agent": "ClaimLineage/0.1 (+https://github.com/7w0nder5/04-claimlineage)",
+        "User-Agent": "ClaimLineage/0.1",
       },
     }, (response) => {
       const status = response.statusCode || 0;
