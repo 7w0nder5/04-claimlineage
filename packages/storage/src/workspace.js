@@ -98,31 +98,34 @@ async function recoverPendingSnapshotTransaction(place) {
       fail("INVALID_TRANSACTION", "transaction.json must contain an object.");
     }
     const keys = Object.keys(transaction).sort();
-    if (keys.join("\n") !== ["kind", "localSources", "schemaVersion", "snapshots"].sort().join("\n")
+    if (keys.join("\n") !== ["kind", "localSources", "objectDigest", "objectExisted", "schemaVersion", "snapshots"].sort().join("\n")
       || transaction.schemaVersion !== SCHEMA_VERSION
-      || transaction.kind !== "snapshot-metadata") {
+      || transaction.kind !== "snapshot-metadata"
+      || !isSha256(transaction.objectDigest)
+      || typeof transaction.objectExisted !== "boolean") {
       fail("INVALID_TRANSACTION", "transaction.json has an unsupported structure.");
     }
     const claims = await readJson(place.claims, "claims.json");
     validateCollections(transaction.snapshots, claims);
     validateLocalSources(transaction.localSources, new Set(transaction.snapshots.map((item) => item.id)));
 
-    let missingObject = false;
+    let objectFailure;
     for (const snapshot of transaction.snapshots) {
       try {
         const bytes = await readObject(place, snapshot.sha256);
         validateSnapshotBytes(snapshot, bytes);
       } catch (error) {
-        if (error.code !== "MISSING_OBJECT") throw error;
-        missingObject = true;
+        if (!["MISSING_OBJECT", "OBJECT_SIZE_MISMATCH", "OBJECT_HASH_MISMATCH", "OBJECT_TOO_LARGE"].includes(error.code)) throw error;
+        objectFailure = error;
         break;
       }
     }
-    if (missingObject) {
+    if (objectFailure) {
       const currentSnapshots = await readJson(place.snapshots, "snapshots.json");
       if (canonicalJson(currentSnapshots) === canonicalJson(transaction.snapshots)) {
-        fail("INCOMPLETE_TRANSACTION", "Committed snapshot metadata refers to a missing object.");
+        fail("INCOMPLETE_TRANSACTION", `Committed snapshot metadata cannot be recovered: ${objectFailure.message}`);
       }
+      if (!transaction.objectExisted) await rm(path.join(place.objects, transaction.objectDigest), { force: true });
       await rm(place.transaction);
       return;
     }
@@ -209,17 +212,26 @@ export async function loadWorkspace(root) {
   return { place, workspace, snapshots, claims, localSources };
 }
 
-async function writeObject(place, digest, bytes) {
+async function writeObject(place, digest, bytes, { onObjectWriteStep = async () => {} } = {}) {
   const target = path.join(place.objects, digest);
   let handle;
+  let created = false;
   try {
     handle = await open(target, "wx", 0o600);
+    created = true;
+    await onObjectWriteStep("opened");
     await handle.writeFile(bytes);
+    await onObjectWriteStep("written");
     await handle.sync();
+    await onObjectWriteStep("synced");
     await handle.close();
     handle = undefined;
   } catch (error) {
     if (handle) await handle.close().catch(() => {});
+    if (created) {
+      await rm(target, { force: true }).catch(() => {});
+      throw error;
+    }
     if (error.code !== "EEXIST") throw error;
     const existing = await readObject(place, digest);
     if (sha256(existing) !== digest) fail("OBJECT_HASH_MISMATCH", `Existing object ${digest} is corrupt.`);
@@ -256,6 +268,7 @@ export async function addSnapshot(root, {
   idFactory = randomUUID,
   now = () => new Date(),
   onTransactionStep = async () => {},
+  onObjectWriteStep = async () => {},
 }) {
   if (!Buffer.isBuffer(bytes)) fail("INVALID_BYTES", "Snapshot content must be a Buffer.");
   if (bytes.length > MAX_SNAPSHOT_BYTES) fail("SNAPSHOT_TOO_LARGE", `Snapshot exceeds ${MAX_SNAPSHOT_BYTES} bytes.`);
@@ -281,14 +294,25 @@ export async function addSnapshot(root, {
     const nextSnapshots = [...current.snapshots, snapshot].sort((left, right) => left.id.localeCompare(right.id));
     const nextLocalSources = { ...current.localSources };
     if (localPath) nextLocalSources[snapshot.id] = localPath;
+    const objectPath = path.join(current.place.objects, digest);
+    let objectExisted;
+    try {
+      await lstat(objectPath);
+      objectExisted = true;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      objectExisted = false;
+    }
     await atomicWriteJson(current.place.transaction, {
       schemaVersion: SCHEMA_VERSION,
       kind: "snapshot-metadata",
       snapshots: nextSnapshots,
       localSources: nextLocalSources,
+      objectDigest: digest,
+      objectExisted,
     });
     await onTransactionStep("journal");
-    await writeObject(current.place, digest, bytes);
+    await writeObject(current.place, digest, bytes, { onObjectWriteStep });
     await onTransactionStep("object");
     await atomicWriteJson(current.place.snapshots, nextSnapshots);
     await onTransactionStep("snapshots");
@@ -333,17 +357,26 @@ export async function addClaim(root, {
 export async function verifyWorkspace(root) {
   const state = await loadWorkspace(root);
   const referenced = new Set();
+  const objectBytes = new Map();
   for (const snapshot of state.snapshots) {
-    const bytes = await readObject(state.place, snapshot.sha256);
+    let bytes = objectBytes.get(snapshot.sha256);
+    if (!bytes) {
+      bytes = await readObject(state.place, snapshot.sha256);
+      objectBytes.set(snapshot.sha256, bytes);
+    }
     validateSnapshotBytes(snapshot, bytes);
     referenced.add(snapshot.sha256);
   }
   const snapshotsById = new Map(state.snapshots.map((item) => [item.id, item]));
+  const verifiedSelectors = new Set();
   for (const claim of state.claims) {
     for (const evidence of claim.evidence) {
       const snapshot = snapshotsById.get(evidence.snapshotId);
-      const bytes = await readObject(state.place, snapshot.sha256);
-      verifyTextSelector(bytes, evidence.selector);
+      const selectorKey = `${snapshot.sha256}\n${canonicalJson(evidence.selector)}`;
+      if (!verifiedSelectors.has(selectorKey)) {
+        verifyTextSelector(objectBytes.get(snapshot.sha256), evidence.selector);
+        verifiedSelectors.add(selectorKey);
+      }
     }
   }
   const entries = await readdir(state.place.objects, { withFileTypes: true });

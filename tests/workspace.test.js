@@ -117,6 +117,28 @@ test("snapshot journal recovers or rolls back every interrupted write stage", as
   }
 });
 
+test("partial object writes are removed and their transaction rolls back", async (t) => {
+  for (const writeStep of ["opened", "written", "synced"]) {
+    const root = await temporaryDirectory(t, `claimlineage-object-${writeStep}-`);
+    await initWorkspace(root);
+    await assert.rejects(
+      () => addSnapshot(root, {
+        bytes: Buffer.from(`partial-${writeStep}`),
+        mediaType: "text/plain",
+        source: { type: "upload", label: `${writeStep}.txt` },
+        onObjectWriteStep(current) {
+          if (current === writeStep) throw new Error(`object ${writeStep} failure`);
+        },
+      }),
+      new RegExp(`object ${writeStep} failure`),
+    );
+    const state = await loadWorkspace(root);
+    assert.equal(state.snapshots.length, 0);
+    assert.deepEqual(await import("node:fs/promises").then(({ readdir }) => readdir(path.join(root, ".claimlineage", "objects"))), []);
+    assert.equal((await verifyWorkspace(root)).valid, true);
+  }
+});
+
 test("staged workspace import leaves no published partial workspace on write failure", async (t) => {
   const parent = await temporaryDirectory(t);
   const bytes = Buffer.from("portable");

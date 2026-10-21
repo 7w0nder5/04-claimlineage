@@ -65,7 +65,7 @@ export async function createBundle(root) {
   for (const digest of [...new Set(state.snapshots.map((item) => item.sha256))].sort()) {
     objects[digest] = (await readObject(state.place, digest)).toString("base64");
   }
-  return {
+  const bundle = {
     format: BUNDLE_FORMAT,
     schemaVersion: SCHEMA_VERSION,
     workspace: state.workspace,
@@ -73,6 +73,8 @@ export async function createBundle(root) {
     claims: [...state.claims].sort((left, right) => left.id.localeCompare(right.id)),
     objects,
   };
+  validateBundle(bundle);
+  return bundle;
 }
 
 export function validateBundle(bundle) {

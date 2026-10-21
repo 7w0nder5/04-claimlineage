@@ -31,7 +31,7 @@ The `.clb` extension denotes one strictly decoded UTF-8 JSON document. It is not
 6. Replay every text selector against the referenced object.
 7. Reject unreferenced objects.
 
-Readers reject more than 10,000 snapshots, 10,000 claims, or 20,000 evidence links before deep validation. Repeated identical selectors are checked once, and unique selector verification is limited to 268,435,456 snapshot byte-checks per bundle.
+Readers and exporters reject more than 10,000 snapshots, 10,000 claims, or 20,000 evidence links before deep validation. Repeated identical selectors are checked once, and unique selector verification is limited to 268,435,456 snapshot byte-checks per bundle. A successful export is validated with the same contract before any output file is created.
 
 The SHA-256 printed by `bundle verify` covers the entire `.clb` file. It identifies the deterministic serialized bundle; the per-object hashes protect each snapshot independently.
 

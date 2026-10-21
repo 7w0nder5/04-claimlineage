@@ -7,13 +7,14 @@ import { addClaim, initWorkspace, loadWorkspace } from "../packages/storage/src/
 import {
   BUNDLE_FORMAT,
   MAX_BUNDLE_EVIDENCE_LINKS,
+  MAX_BUNDLE_ITEMS,
   MAX_VERIFICATION_WORK_BYTES,
   exportBundle,
   importBundle,
   validateBundle,
   verifyBundleFile,
 } from "../packages/export/src/bundle.js";
-import { sha256 } from "../packages/core/src/index.js";
+import { createTextSelector, sha256 } from "../packages/core/src/index.js";
 import { temporaryDirectory } from "./helpers.js";
 
 async function populatedWorkspace(t) {
@@ -169,4 +170,62 @@ test("bundle import refuses a destination that already contains workspace data",
   const file = path.join(await temporaryDirectory(t), "source.clb");
   await exportBundle(root, file);
   await assert.rejects(() => importBundle(file, root), (error) => error.code === "WORKSPACE_EXISTS");
+});
+
+test("export refuses a workspace above the shared item-count contract", async (t) => {
+  const root = await temporaryDirectory(t);
+  await initWorkspace(root);
+  const stored = await importUpload(root, { bytes: Buffer.from("x"), name: "x.txt" });
+  const snapshots = Array.from({ length: MAX_BUNDLE_ITEMS + 1 }, (_, index) => ({
+    schemaVersion: 1,
+    id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    capturedAt: "2026-01-02T03:04:05.000Z",
+    mediaType: "text/plain",
+    byteLength: 1,
+    sha256: stored.sha256,
+    source: { type: "upload", label: "x.txt" },
+  }));
+  await writeFile(path.join(root, ".claimlineage", "snapshots.json"), JSON.stringify(snapshots));
+  const output = path.join(await temporaryDirectory(t), "too-many.clb");
+  await assert.rejects(() => exportBundle(root, output), /must not exceed/);
+  await assert.rejects(() => readFile(output), (error) => error.code === "ENOENT");
+});
+
+test("export refuses a workspace above the shared evidence-link contract", async (t) => {
+  const root = await temporaryDirectory(t);
+  await initWorkspace(root);
+  const stored = await importUpload(root, { bytes: Buffer.from("x"), name: "x.txt" });
+  const selector = { type: "TextQuoteSelector", exact: "x", prefix: "", suffix: "", startByte: 0, endByte: 1 };
+  const claimCount = Math.floor(MAX_BUNDLE_EVIDENCE_LINKS / 100) + 1;
+  const claims = Array.from({ length: claimCount }, (_, index) => ({
+    schemaVersion: 1,
+    id: `00000000-0000-4000-8000-${String(index + 100).padStart(12, "0")}`,
+    statement: `Claim ${index}`,
+    createdAt: "2026-01-02T03:04:05.000Z",
+    evidence: Array.from({ length: 100 }, () => ({ snapshotId: stored.id, selector })),
+  }));
+  await writeFile(path.join(root, ".claimlineage", "claims.json"), JSON.stringify(claims));
+  const output = path.join(await temporaryDirectory(t), "too-many-links.clb");
+  await assert.rejects(() => exportBundle(root, output), (error) => error.code === "VERIFICATION_WORK_LIMIT");
+  await assert.rejects(() => readFile(output), (error) => error.code === "ENOENT");
+});
+
+test("export refuses a workspace above the shared selector-work contract", async (t) => {
+  const root = await temporaryDirectory(t);
+  await initWorkspace(root);
+  const markers = Array.from({ length: Math.floor(MAX_VERIFICATION_WORK_BYTES / (10 * 1024 * 1024)) + 1 }, (_, index) => `unique-marker-${String(index).padStart(2, "0")}`);
+  const header = Buffer.from(markers.join("\n"));
+  const bytes = Buffer.concat([header, Buffer.alloc(10 * 1024 * 1024 - header.length, 0x78)]);
+  const stored = await importUpload(root, { bytes, name: "large.txt" });
+  const claims = markers.map((marker, index) => ({
+    schemaVersion: 1,
+    id: `00000000-0000-4000-8000-${String(index + 500).padStart(12, "0")}`,
+    statement: `Claim ${index}`,
+    createdAt: "2026-01-02T03:04:05.000Z",
+    evidence: [{ snapshotId: stored.id, selector: createTextSelector(bytes, marker) }],
+  }));
+  await writeFile(path.join(root, ".claimlineage", "claims.json"), JSON.stringify(claims));
+  const output = path.join(await temporaryDirectory(t), "too-much-work.clb");
+  await assert.rejects(() => exportBundle(root, output), (error) => error.code === "VERIFICATION_WORK_LIMIT");
+  await assert.rejects(() => readFile(output), (error) => error.code === "ENOENT");
 });

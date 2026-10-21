@@ -13,3 +13,4 @@ All notable changes are documented here. This project follows Semantic Versionin
 - Added a token-protected loopback web workspace and a cross-platform CLI.
 - Added journaled metadata recovery and staged workspace publication.
 - Added canonical bundle parsing, bounded verification work, and explicit uncheckable-source exit status.
+- Added partial-object cleanup and exporter/verifier contract parity at every bundle limit.
